@@ -118,3 +118,89 @@ As we pass the current iteration variable to the closure, a copy of the string s
 Goroutines are given a few kilobytes, which is almost always enough, when it isn't, the run-time grows (and shrinks) the memory for storing the stack automatically.
 
 ### The sync Package
+#### WaitGroup
+WaitGroup is a great way to wait for a set of concurrent operations to complete when we either don't care about the result of the concurrent operation, or we have other means of collecting their results.
+If none of those conditions are true, we should use channels and a select statement instead.
+
+Example of using a WaitGroup to wait for goroutines to complete:
+```
+var wg sync.WaitGroup
+
+wg.Add(1)
+go func() {
+    defer wg.Done()
+    fmt.Println("1st goroutine sleeping...")
+    time.Sleep(1)
+}()
+
+wg.Add(1)
+go func() {
+    defer wg.Done()
+    fmt.Println("2st goroutine sleeping...")
+    time.Sleep(2)
+}()
+
+wg.Wait()
+fmt.Println("All goroutines complete.")
+```
+
+We use `wg.Wait()` with an argument of 1 to indicate that one goroutine is beginning.
+We use `defer wg.Done()` to ensure that bfore we exit the goroutine's closure, we indicate to the WaitGroup that we've exited.
+Finally, we call `wg.Wait()` to block the main goroutine untill all goroutines have indicated that they have exited.
+
+We have to call `Add()` outside the goroutine itself, otherwise, we would introduce a race condition.
+We should couple calls to `Add()` as close as possible to the goroutines they're helping to track. We can also use it to track a group of goroutines all at once.
+
+
+#### Mutex and RWMutex (mutually exclusive)
+Mutex stands for "mutual exclusion", and is a way to guard critical sections of your program. A critical section is an area of our program that requires exclusive access to a shared resource.
+A Mutex provides concurrent-safe way to express exclusive access to these shared resources.
+
+```
+var count int
+var lock sync.Mutex
+
+increment := func() {
+    lock.Lock()
+    defer lock.Unlock()
+    count++
+    fmt.Println("Incrementing: %d\n", count)
+}
+```
+
+Using `lock.Lock()` we request the exclusive use of the critical section, in this case the count variable, guarded by a Mutex, lock.
+Using `lock.Unlock()` we indicate that we are done with the critical section lock is guarding. Using `defer`to call `Unlock`is a very common idiom when using Mutex to ensure the call always happens, even when panicking. Not doing so will probably cause your program to have a deadlock
+
+Critical sections are so named because they reflect a bottleneck in our program. It is expensive to enter and exit a critical section, and generally people attempt to minimize the time spent in critical sections.
+One strategy is to check if we need all the processes to read *and* write to this memory. If not, we can take advantage of `sync.RWMutex`.
+
+`sync.RWMutex` is conceptually the same as a `Mutex`, it guards access to memory, however, `RWMutex` gives us a bit more control over the memory. We can request a lock for reading, in which case we will be granted access unless the lock is being held for writing.
+Example:
+
+It is usually advisable to use RWMutex instead of Mutex when it logically makes sense.
+
+### Cond
+```
+c := sync.NewCond(&sync.Mutex{})
+c.L.Lock()
+for conditionTrue() == false {
+    c.Wait()
+}
+c.L.Unlock()
+```
+
+- `sync.NewCond` takes any type that satisfies the sync.Locker interface.
+- We call `c.L.Lock()`, this is necessary because the call to `Wait()` automatically calls `Unlock` on the `Locker` when entered
+- When the `Wait()` exits, it locks the `Locker` lock
+
+A call to `Wait` doesn't just block, it *suspends* the current goroutine, allowing other goroutines to run on the OS thread.
+
+Upon entering `Wait`, `Unlock` is called on the Cond variable's `Locker`, and upon exiting `Wait`, `Lock` is called on the Cond variable's `Locker`. Even though it loookes like we are holding this lock the entier time while we wait for the condition to ocurr, that's not actually the case.
+
+`Signal()` is a method from `Cond` that maintains a FIFO list of goroutines waiting to be signaled. Signal finds the goroutine that's been waiting the longest and notifies that.
+
+`Broadcast()` sends a signal to all goroutines that are waiting.
+
+#### Once
+
+`once.Do()` will execute the function passed in exactly once. Always once.
