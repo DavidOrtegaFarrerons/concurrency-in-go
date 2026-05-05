@@ -35,7 +35,7 @@ go sayHello()
 
 Goroutines are not OS threads, and they are not exactly green threads (threads managed by the language's runtime).
 They are a higher level of abstraction known as *coroutines*. Coroutines are concurrent subroutines (functions, closures, or methods in Go)
-that are *nonpreemtive* (they cannot be interrupted). Coroutines have multiple points throughout which allow for suspension or reentry.
+that are *non-preemtive* (they cannot be interrupted). Coroutines have multiple points throughout which allow for suspension or reentry.
 
 Goroutines don't define their own suspension or reentry points, Go's runtime obersves the runtime behavior of goroutines and automatically suspends them when they block and then resumes them when they become unblocked.
 They are implicitly concurrent constructs, but concurrency is not a property of a coroutine: something must host several coroutines simultaneously and give each an opportunity to execute, otherwhise, they wouldn't be concurrent!
@@ -204,3 +204,413 @@ Upon entering `Wait`, `Unlock` is called on the Cond variable's `Locker`, and up
 #### Once
 
 `once.Do()` will execute the function passed in exactly once. Always once.
+It can cause a deadlock if we call a function using once that calls a function that already has been called by once.
+
+#### Pool
+`Pool` is a concurrent-safe implementation of the object pool pattern. It's commonly used to constrain the creation of things that are expensive (like database connections) so a fixed number of them are ever created, but an indeterminate number of operations can still request access to these things.
+It is safe to use `sync.Pool` by multiple goroutines.
+
+`Pool` primary interface is its `Get` method. When called, `Get` will first check whether there are any instances available within the pool to return to the caller, and if not, call its `New` member variable to create a new one.
+When finished, callers call `Put` to place the instance they were working with back in the pool for use by other processes.
+
+Why use `Pool` instead of instantiating object as we go? Because the pool will let us reuse this objects, instead of the GC removing them and us creating them again.
+
+Another use of `Pool` is for warming a cache of pre-allocated objects for operations that must run as quickly as possible.
+
+Rules for using `Pool` correctly:
+
+- When instantiating sync.Pool, give it a New member variable that is thread-safe
+when called.
+
+- When you receive an instance from Get, make no assumptions regarding the
+state of the object you receive back.
+
+- Make sure to call Put when you’re finished with the object you pulled out of the
+pool. Otherwise, the Pool is useless. Usually this is done with defer.
+
+- Objects in the pool must be roughly uniform in makeup.
+
+### Channels
+`Channel` is one of the synchronization primitives in Go derived from Hoare's CSP. While it can be used to synchronize access to memory, it is best used to communicate information between goroutines.
+
+Creating a channel is very simple:
+```
+var dataStream chan interface{}
+dataStream = make(chan interface{})
+```
+
+This example defines a `channel` called *dataStream* upon which any value can be written or read. Channels can also be declared to only support a unidirectional flow of data.
+
+To declare a unidirectional channel, include the <- operator. To both declare and instantiate a channel that can only read, place the <- operator on the left hand side:
+```
+var dataStream <- chan interface{}
+dataStream := make(<-chan interface{})
+```
+
+To declare and create a channel that can only send, you place the <- operator on the right-hand side:
+```
+var dataStream chan<- interface{}
+dataStream := make(chan<- interface{}
+```
+
+Unidirectional channels are not often seen instantiated, but we can often see them used as a function parameter and return type, which is very useful.
+This is possible because Go will implicitly convert bidirectional channels to unidirectional channels when needed.
+```
+var receiveChan <-chan interface{}
+var sendChan chan<- interface{}
+dataStream := make(chan interface{})
+// Valid statements:
+receiveChan = dataStream
+sendChan = dataStream
+```
+
+Sending is done by placing the <- operator to the right of a channel, and receiving is done by placing the <- operator to the left of the channel. Another way to think of this is the data flows into the variable in the direction the arrow points.
+```
+stringStream := make(chan string)
+go func() {
+    stringStream <- "Hello channels!"
+}()
+fmt.Println(<-stringStream)
+```
+
+This produces:
+```
+Hello channels!
+```
+
+It is an error to try and write a value onto a read-only channel, and an error to read a value from a write-only channel. Go compiler will let us know that we are doing something ilegal:
+```
+invalid operation: <-writeStream (receive from send-only type
+chan<- interface {})
+invalid operation: readStream <- struct {} literal (send to receive-only
+type <-chan interface {})
+```
+
+Go channels are said to be *blocking*. Any goroutine that attempts to write to a channel that is full will wait until the channel has been emptied, and any goroutine that attempts to read from a channel that is empty will wait until at least one item is placed on it.
+This can cause deadlocks if we don't structure our program correctly.
+
+The recieving form of the <- operator can also optionally return two values like so:
+```
+stringStream := make(chan string)
+go func() {
+    stringStream <- "Hello channels!"
+}()
+salutation, ok := <-stringStream
+fmt.Printf("(%v): %v", ok, salutation)
+```
+Which will print:
+```
+(true): Hello channels!
+```
+
+The second return value is a way for a read operation to indicate whether the read off the channel was a value generated by a write elsewhere in the process, or a default value generated from a closed channel.
+Closing a channel is useful to help downstream processes know when to move on, exit, reopen communications on a new or different channel, etc...
+
+To close a channel we use the `close` keyword:
+```
+valueStream := make(chan interface{})
+close(valueStream)
+```
+
+Interestingly, we can read from a closed channel as well:
+```
+intStream := make(chan int)
+close(intStream)
+integer, ok := <- intStream
+fmt.Printf("(%v): %v", ok, integer)
+```
+
+This will produce:
+```
+(false): 0
+```
+
+We can loop over channels too:
+```
+intStream := make(chan int)
+go func() {
+    defer close(intStream)
+    for i := 1; i <=5; i++ {
+        intStream <- i
+    }
+}()
+
+for integer := range intStream {
+    fmt.Printf("%v ", integer)
+}
+```
+
+The loop doesn't need an exit criteria, it is managed for us to keep the loop concise.
+
+Closing a channel is also a way to signal multiple goroutines simultaneously as a closed channel can be read infinite times. It is cheaper and faster to close a channel that to perform n writes.
+
+We can also create *buffered channels* which are channels that are given a *capacity* when they are instantiated.
+```
+var dataStream chan interface{}
+dataStream = make(chan interface{}, 4)
+```
+
+We created a channel with a capacity of 4, this means that we can place four things onto the channel regardless of wether it's being read from.
+
+Unbuffered channels are also defined in terms of buffered channels. An unbuffered channel is simply a buffered channel created with a capacity of 0.
+```
+a := make(chan int)
+b := make(chan int, 0)
+```
+
+Both channels are int channels with a capacity of zero.
+
+Writes to a channel block if a channel is full, and reads from a channel block if a channel is empty.
+"Full" and "empty" are functions of the capacity, or buffer size. An unbuffered channel has a capacity of zero and so it's already full before any writes.
+
+A buffered channel with no receivers and a capacity of four would be full after four writes, and block on the fifth write since it has nowhere else to place the fifth element. 
+
+Buffered channels are an in-memory FIFO queue for concurrent processes to communicate over.
+
+Example:
+```
+c := make(chan rune, 4)
+```
+
+This creates a channel with a buffer that has four slots, like so:
+![empty fifo representation](empty-fifo.png)
+
+Now, let’s write to the channel: `c <- 'A'`
+
+When this channel has no readers, the A rune will be placed in the first slot in the
+channel’s buffer, like so:
+![fifo representation with A filled in it](fifo-with-a.png)
+
+Each subsequent write onto the buffered channel (again, assuming no readers) would
+fill up the remaining slots in the buffered channel, like so:
+
+![fifo representation with A and B, then A-B-C, then A-B-C-D filled in it](fifo-with-b-c-d.png)
+
+After four writes, our buffered channel with a capacity of four is full. What happens if
+we attempt to write to the channel again?
+```
+c <- 'E'
+```
+![fifo representation trying to add E to a full FIFO](fifo-with-e.png)
+
+The goroutine performing this write is blocked! The goroutine will remain blocked
+until room is made in the buffer by some goroutine performing a read. Let’s see what
+that looks like:
+```
+<-c
+```
+![fifo representation of a reciever being sent A from the FIFO queue](fifo-sending-a.png)
+
+As you can see, the read receives the first rune that was placed on the channel, A, the
+write that was blocked becomes unblocked, and E is placed on the end of the buffer.
+
+
+If the buffer is empty and the receiver is already waiting, the sender data will be sent directly to the receiver without entering the buffer.
+
+Buffered channels can be useful in certain situations, but we should create them with care. They can easily become a premature optimization and also hide deadlocks by making them more unlikely to happen.
+
+The default value for channels is `nil`.
+
+What happens if we try to read a nil channel?:
+```
+var dataStream chan interface{}
+<-dataStream
+```
+
+it will panic with:
+```
+fatal error: all goroutines are asleep - deadlock!
+goroutine 1 [chan receive (nil chan)]:
+main.main()
+/tmp/babel-23079IVB/go-src-23079O4q.go:9 +0x3f
+exit status 2
+```
+
+A deadlock! This indicates that reading from a `nil` channel will block (although not necessarily deadlock) a program.
+What about writes?
+```
+var dataStream chan interface{}
+dataStream <- struct{}{}
+```
+
+This produces:
+```
+fatal error: all goroutines are asleep - deadlock!
+goroutine 1 [chan send (nil chan)]:
+main.main()
+/tmp/babel-23079IVB/go-src-23079dnD.go:9 +0x77
+exit status 2
+```
+
+What happens if we try to close a `nil` channel?
+```
+var dataStream chan interface{}
+close(dataStream)
+```
+
+this produces:
+```
+panic: close of nil channel
+goroutine 1 [running]:
+panic(0x45b0c0, 0xc42000a160)
+/usr/local/lib/go/src/runtime/panic.go:500 +0x1a1
+main.main()
+/tmp/babel-23079IVB/go-src-230794uu.go:9 +0x2a
+exit status 2
+```
+
+This is probably the worst outcome, a panic. We have to ensure the channels we are working with are always initialized first.
+
+Table of channel operations and outcomes:
+![Table of channel operations and outcomes](channel-operations-table.png)
+
+To build robust and stable logic with channels, we should put them in the right context, which is, assign channel *ownership*.
+We define ownership as being a goroutine that instantiates, writes and closes a channel.
+
+Unidirectional channel declarations are the tool that will allow us to distinguish between goroutines that own channels and those that only utilize them:
+channel owners have a write-access view into the channel (chan or chan<-), and channel utilizers only have a read-only view into the channel (<-chan).
+
+Channel owners should
+1. Instantiate the channel.
+2. Perform writes, or pass ownership to another goroutine.
+3. Close the channel.
+4. Encapsulate the previous three things in this list and expose them via a reader
+   channel.
+
+By assigning these responsibilities to channel owners, a few things happen:
+- Because we’re the one initializing the channel, we remove the risk of deadlocking
+by writing to a nil channel.
+- Because we’re the one initializing the channel, we remove the risk of panicing by
+closing a nil channel.
+- Because we’re the one who decides when the channel gets closed, we remove the
+risk of panicing by writing to a closed channel.
+- Because we’re the one who decides when the channel gets closed, we remove the
+risk of panicing by closing a channel more than once.
+- We wield the type checker at compile time to prevent improper writes to our
+channel.
+
+Now, as a consumer of a channel, I only have to worry about two things:
+
+- Knowing when a channel is closed.
+- Responsibly handling blocking for any reason.
+
+The first point can easily be addressed by examining the second return value from the read operation.
+The second point is much harder to define because it depends on what we want to do, time out, stop reading, or maybe block for the lifetime of the process.
+
+The important thing is that as a consumer you should handle the fact that reads can and will block.
+```
+chanOwner := func() <-chan int {
+    resultStream := make(chan int, 5)
+    go func() {
+        defer close(resultStream)
+        for i := 0; i <= 5; i++ {
+            resultStream <- i
+        }
+    }()
+
+    return resultStream
+}
+resultStream := chanOwner()
+for result := range resultStream {
+    fmt.Printf("Received: %d\n", result)
+}
+fmt.Println("Done receiving!")
+```
+
+
+### The select Statement
+The `select` statement is the glue that binds channels together. It's how we're able to compose channels together in a program to form larger abstractions.
+```
+var c1, c2 <-chan interface{}
+var c3 chan<- interface{}
+select {
+case <- c1:
+    // Do something
+case <- c2:
+    // Do something
+case c3<- struct{}{}:
+    // Do something
+}
+```
+
+Case statements in a `select` block aren't tested sequentially and execution won't automatically fall through if none of the criteria are met.
+
+All channel reads and writes are considered "simultaneously" to see if any of them are ready. Populated or closed channels in the case of reads, and channels that are not at capacity in the case of writes. If none of the channels are ready, the entire `select` statement blocks.
+
+Go will try to distribute the reads from different cases evenly, that is, 50/50.
+
+If you want to timeout after an amount of time, you can do:
+```
+var c <- chan int
+select {
+case <-c:
+case <-time.After(1 * time.Second):
+    fmt.Println("Timed out.")
+}    
+```
+
+This will print:
+```
+Timed out.
+```
+
+time.After returns a channel that will send the current time after the duration you provide it.
+
+We also have the option of putting a default case:
+```
+start := time.Now()
+var c1, c2 <-chan int
+select {
+case <-c1:
+case <-c2:
+default:
+    fmt.Printf("In default after %v\n\n", time.Since(start))
+}
+```
+
+This will produce:
+```
+In default after 1.421µs
+```
+
+Usually we see `default` clauses used in conjunction with a for-select loop. This allows a goroutine to make progress on work while waiting for another goroutine to report a result:
+```
+done := make(chan interface{})
+go func() {
+time.Sleep(5*time.Second)
+close(done)
+}()
+workCounter := 0
+loop:
+for {
+    select {
+    case <-done:
+        break loop
+    default:
+    }
+    // Simulate work
+    workCounter++
+    time.Sleep(1*time.Second)
+}
+fmt.Printf("Achieved %v cycles of work before signalled to stop.\n", workCounter)
+```
+
+This produces:
+```
+Achieved 5 cycles of work before signalled to stop.
+```
+
+There is also a special case for empty `select` statements: `select` statements with no case clauses:
+```
+select {}
+```
+This statements will simply block forever.
+
+### The GOMAXPROCS Lever
+This setting controls the number of OS threads that will host so-called "work queues".
+Prior to Go 1.5 GOMAXPROCS was always set to 1, and people would always do the following:
+```
+runtime.GOMAXPROCS(runtime.NumCPU())
+```
+
+Almost all developers want to take advantage of all the cores on the machine their process is running in. Because of this, in subsequent Go versions it is now automatically set to the number of logical CPUs on the host machine.
