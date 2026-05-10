@@ -1010,7 +1010,6 @@ bridge := func(
 			case maybeStream, ok := <-chanStream:
 				if ok == false {
 					return
-                
                 }
 				stream = maybeStream
             case <-done:
