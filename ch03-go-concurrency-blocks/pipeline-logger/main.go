@@ -8,9 +8,9 @@ import (
 
 func main() {
 	pipeline := pipeline.New(
-		[]pipeline.Step{
-			&pipeline.RemoveDebugStringsStep{},
-			&pipeline.TransformTextToUppercaseStep{},
+		[]pipeline.Stage{
+			&pipeline.RemoveDebugStringsStage{},
+			&pipeline.TransformTextToUppercaseStage{},
 		},
 		os.Stdout,
 	)

@@ -2,7 +2,7 @@ package pipeline
 
 import (
 	"bytes"
-	"strings"
+	"io"
 	"sync"
 	"testing"
 )
@@ -40,15 +40,36 @@ func TestPipelineStart(t *testing.T) {
 			buf := &bytes.Buffer{}
 			pipeline := Pipeline{
 				wg:     sync.WaitGroup{},
-				steps:  []Step{&RemoveDebugStringsStep{}, &TransformTextToUppercaseStep{}},
+				stages: []Stage{&RemoveDebugStringsStage{}, &TransformTextToUppercaseStage{}},
 				output: buf,
 			}
 
 			pipeline.Start(tt.input)
 
-			if strings.Compare(buf.String(), tt.expectedOutput) != 0 {
+			if buf.String() != tt.expectedOutput {
 				t.Errorf("Got %+v\n want %+v", buf.String(), tt.expectedOutput)
 			}
 		})
+	}
+}
+
+func BenchmarkPipelineStart(b *testing.B) {
+	input := []string{
+		"INFO hello",
+		"DEBUG should disappear",
+		"ERROR something failed",
+		"INFO another line",
+	}
+
+	for b.Loop() {
+		pipeline := Pipeline{
+			stages: []Stage{
+				&RemoveDebugStringsStage{},
+				&TransformTextToUppercaseStage{},
+			},
+			output: io.Discard,
+		}
+
+		pipeline.Start(input)
 	}
 }

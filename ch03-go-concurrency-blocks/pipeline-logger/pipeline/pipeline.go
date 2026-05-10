@@ -6,14 +6,14 @@ import (
 	"sync"
 )
 
-type Step interface {
+type Stage interface {
 	Execute(<-chan string) <-chan string
 }
 
-type RemoveDebugStringsStep struct {
+type RemoveDebugStringsStage struct {
 }
 
-func (s *RemoveDebugStringsStep) Execute(data <-chan string) <-chan string {
+func (s *RemoveDebugStringsStage) Execute(data <-chan string) <-chan string {
 	ch := make(chan string)
 	go func() {
 		for d := range data {
@@ -29,10 +29,10 @@ func (s *RemoveDebugStringsStep) Execute(data <-chan string) <-chan string {
 	return ch
 }
 
-type TransformTextToUppercaseStep struct {
+type TransformTextToUppercaseStage struct {
 }
 
-func (s *TransformTextToUppercaseStep) Execute(data <-chan string) <-chan string {
+func (s *TransformTextToUppercaseStage) Execute(data <-chan string) <-chan string {
 	ch := make(chan string)
 	go func() {
 		for d := range data {
@@ -47,39 +47,40 @@ func (s *TransformTextToUppercaseStep) Execute(data <-chan string) <-chan string
 
 type Pipeline struct {
 	wg     sync.WaitGroup
-	steps  []Step
+	stages []Stage
 	output io.Writer
 }
 
-func New(steps []Step, output io.Writer) *Pipeline {
+func New(stages []Stage, output io.Writer) *Pipeline {
 	return &Pipeline{
 		wg:     sync.WaitGroup{},
-		steps:  steps,
+		stages: stages,
 		output: output,
 	}
 }
 
 func (p *Pipeline) Start(text []string) {
-	input := make(chan string)
-	go func() {
-		for _, t := range text {
-			input <- t
-		}
-		close(input)
-	}()
+	readData := func(text []string) <-chan string {
+		input := make(chan string)
 
-	var ch <-chan string = input
-	for _, s := range p.steps {
+		go func() {
+			defer close(input)
+
+			for _, t := range text {
+				input <- t
+			}
+		}()
+
+		return input
+	}
+
+	var ch = readData(text)
+
+	for _, s := range p.stages {
 		ch = s.Execute(ch)
 	}
 
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-		for r := range ch {
-			p.output.Write([]byte(r + "\n"))
-		}
-	}()
-
-	p.wg.Wait()
+	for r := range ch {
+		p.output.Write([]byte(r + "\n"))
+	}
 }
